@@ -89,6 +89,12 @@ textarea.input{resize:vertical;min-height:84px}
 .seg button.on{background:var(--g);color:#fff}
 .chip{border:1px solid var(--bd);background:#fff;border-radius:999px;padding:6px 12px;font-size:11.5px;font-weight:700;color:var(--tx);cursor:pointer;transition:all .2s}
 .chip.on{background:var(--g);color:#fff;border-color:var(--g)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:8px}
+.ph{position:relative;aspect-ratio:1;border-radius:12px;overflow:hidden;border:1px solid var(--bd);background:#F1F7F3;cursor:zoom-in}
+.ph img{width:100%;height:100%;object-fit:cover;display:block}
+.ph .x{position:absolute;top:4px;right:4px;width:22px;height:22px;border-radius:50%;border:0;background:rgba(15,31,23,.72);color:#fff;display:grid;place-items:center;cursor:pointer;padding:0;font-size:14px;line-height:1}
+.lb{position:fixed;inset:0;z-index:150;background:rgba(10,20,15,.88);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;gap:12px}
+.lb img,.lb video{max-width:100%;max-height:78vh;border-radius:14px;background:#000}
 </style>
 </head>
 <body>
@@ -96,6 +102,7 @@ textarea.input{resize:vertical;min-height:84px}
   <div id="root"><div class="p-6 max-w-md mx-auto"><div class="skel h-40 mb-3"></div><div class="skel h-24"></div></div></div>
   <div id="modal"></div>
   <div id="toasts"></div>
+  <div id="lightbox"></div>
 </div>
 
 <script type="module">
@@ -106,7 +113,7 @@ const IS_PREVIEW = false; // Ubah menjadi false SAAT DEPLOY / PUBLISH agar terhu
 
 // PASTE FIREBASE CONFIG ANDA DI SINI
 const firebaseConfig = {
-  apiKey: "AIzaSyCmB2tYSisCYb19Gg4CDiXNeroAg2jwu_Q",
+ apiKey: "AIzaSyCmB2tYSisCYb19Gg4CDiXNeroAg2jwu_Q",
   authDomain: "surat-masuk-130e0.firebaseapp.com",
   projectId: "surat-masuk-130e0",
   storageBucket: "surat-masuk-130e0.firebasestorage.app",
@@ -138,6 +145,61 @@ const byNama = (a, b) => (a.nama || '').localeCompare(b.nama || '');
 const greet = () => { const h = now().getHours(); return h < 11 ? 'Selamat Pagi' : h < 15 ? 'Selamat Siang' : h < 18 ? 'Selamat Sore' : 'Selamat Malam'; };
 const sisa = iso => { const d = new Date(iso) - now(); if (d < 0) { const h = Math.floor(-d / 36e5); return h < 24 ? `Terlewat ${h} jam` : `Terlewat ${Math.floor(h / 24)} hari`; } const h = Math.floor(d / 36e5); return h < 24 ? `${h} jam lagi` : `${Math.floor(h / 24)} hari lagi`; };
 const COLORS = ['#34B27B', '#3B82F6', '#F59E0B', '#8B5CF6', '#EC4899'];
+
+// ----- Foto / kamera (disimpan terkompres langsung di dokumen pengumpulan) -----
+const MAX_FOTO = 3, MAX_FOTO_CHARS = 330000, MAX_TOTAL_CHARS = 900000;
+let PH = [];          // foto yang sedang disiapkan di form pengumpulan (data URL JPEG)
+let camStream = null; // stream kamera langsung (desktop)
+const okImg = s => typeof s === 'string' && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(s);
+const fotosOf = p => (p && Array.isArray(p.fotos) ? p.fotos.filter(okImg) : []);
+function encodeJpeg(src, w, h) {
+  for (const [m, q] of [[1280, 0.72], [1024, 0.6], [800, 0.5], [640, 0.45]]) {
+    const s = Math.min(1, m / Math.max(w, h)), c = document.createElement('canvas');
+    c.width = Math.max(1, Math.round(w * s)); c.height = Math.max(1, Math.round(h * s));
+    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(src, 0, 0, c.width, c.height);
+    const out = c.toDataURL('image/jpeg', q);
+    if (out.length <= MAX_FOTO_CHARS) return out;
+  }
+  throw new Error('Foto terlalu besar. Coba foto dengan resolusi lebih kecil.');
+}
+async function compressFile(file) {
+  if (!/^image\//.test(file.type)) throw new Error('File harus berupa gambar.');
+  const url = URL.createObjectURL(file);
+  try {
+    const im = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = () => no(new Error('Gambar tidak dapat dibaca.')); i.src = url; });
+    return encodeJpeg(im, im.naturalWidth, im.naturalHeight);
+  } finally { URL.revokeObjectURL(url); }
+}
+function addPhoto(d) {
+  if (PH.length >= MAX_FOTO) throw new Error('Maksimal ' + MAX_FOTO + ' foto.');
+  if (PH.reduce((a, s) => a + s.length, 0) + d.length > MAX_TOTAL_CHARS) throw new Error('Total ukuran foto terlalu besar. Hapus satu foto lalu coba lagi.');
+  PH.push(d); refreshPH();
+}
+function photoGrid(list, pid, removable) {
+  return list.map((s, i) => `<div class="ph" data-act="zoom" data-pid="${esc(pid)}" data-i="${i}"><img src="${s}" alt="Foto ${i + 1}" loading="lazy">${removable ? `<button type="button" class="x" data-act="photo-del" data-i="${i}" title="Hapus foto">&times;</button>` : ''}</div>`).join('');
+}
+function refreshPH() {
+  const g = $('#phGrid'); if (!g) return;
+  g.innerHTML = photoGrid(PH, '_ph', true);
+  const c = $('#phCount'); if (c) c.textContent = PH.length + '/' + MAX_FOTO + ' foto';
+}
+function stopCam() {
+  if (camStream) { camStream.getTracks().forEach(t => t.stop()); camStream = null; }
+  const lb = $('#lightbox'); if (lb) lb.innerHTML = '';
+}
+async function openCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { $('#fileCam').click(); return; }
+  try {
+    camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+    $('#lightbox').innerHTML = `<div class="lb"><video id="camv" autoplay playsinline muted></video><div class="flex gap-2"><button type="button" class="btn btn-p" data-act="cam-snap">${ic('camera', 'w-4 h-4')} Ambil Foto</button><button type="button" class="btn btn-s" data-act="cam-close">Batal</button></div></div>`;
+    lucide.createIcons();
+    $('#camv').srcObject = camStream;
+  } catch (e) {
+    camStream = null; stopCam();
+    toast('Kamera tidak dapat dibuka (izin ditolak atau bukan https). Pilih gambar dari perangkat.', 'err');
+    $('#fileGal').click();
+  }
+}
 const badge = (t, c) => `<span class="badge ${c}">${t}</span>`;
 const empty = (m = 'Belum ada data') => `<div class="py-10 text-center text-slate-400 text-sm">${ic('inbox', 'w-8 h-8 mx-auto mb-2 opacity-50')}${m}</div>`;
 const sha256 = async t => { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(t)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); };
@@ -308,7 +370,7 @@ function openModal(html, wide) {
   $('#modal').innerHTML = `<div class="mback"><div class="mbox glass ${wide ? 'wide' : ''}">${html}</div></div>`;
   lucide.createIcons();
 }
-function closeModal() { $('#modal').innerHTML = ''; }
+function closeModal() { $('#modal').innerHTML = ''; PH = []; stopCam(); }
 const mhead = t => `<div class="flex items-center justify-between mb-3"><div class="text-base font-extrabold">${t}</div><button class="btn btn-s btn-sm" data-act="mclose" type="button">${ic('x', 'w-4 h-4')}</button></div>`;
 const mfoot = (label = 'Simpan') => `<div class="ferr mb-2"></div><div class="flex justify-end gap-2"><button type="button" class="btn btn-s" data-act="mclose">Batal</button><button type="submit" class="btn btn-p">${label}</button></div>`;
 let pend = null;
@@ -500,7 +562,7 @@ AV.nilai = () => {
   const masuk = sk.filter(s => subOf(t.id, s.id)).length;
   const rows = sk.map(s => {
     const p = subOf(t.id, s.id);
-    return `<tr><td class="font-semibold">${esc(s.nama)}<div class="text-[11px] text-slate-400 font-normal">${esc(s.nis)}</div></td><td class="text-slate-500">${p ? fmtD(p.waktuKumpul) : '—'}</td><td>${stBadge(p)}</td><td class="font-bold">${p && p.nilai != null ? p.nilai + '/' + t.nilaiMaks : '—'}</td><td class="text-right">${p ? `<button class="btn btn-s btn-sm" data-act="grade" data-id="${esc(p.id)}">${ic('pencil', 'w-3.5 h-3.5')} ${p.nilai != null ? 'Ubah' : 'Nilai'}</button>` : ''}</td></tr>`;
+    return `<tr><td class="font-semibold">${esc(s.nama)}<div class="text-[11px] text-slate-400 font-normal">${esc(s.nis)}</div></td><td class="text-slate-500">${p ? fmtD(p.waktuKumpul) : '—'}</td><td>${stBadge(p)}${fotosOf(p).length ? ' ' + badge(ic('camera', 'w-3 h-3 inline') + ' ' + fotosOf(p).length, 'b-s') : ''}</td><td class="font-bold">${p && p.nilai != null ? p.nilai + '/' + t.nilaiMaks : '—'}</td><td class="text-right">${p ? `<button class="btn btn-s btn-sm" data-act="grade" data-id="${esc(p.id)}">${ic('pencil', 'w-3.5 h-3.5')} ${p.nilai != null ? 'Ubah' : 'Nilai'}</button>` : ''}</td></tr>`;
   }).join('');
   return `
   ${head('Pengumpulan & Penilaian', 'Pilih tugas untuk melihat dan menilai pengumpulan')}
@@ -680,6 +742,7 @@ function mNilai(pid) {
   openModal(`${mhead('Penilaian')}
     <div class="text-sm mb-3"><div class="font-extrabold">${esc(p.namaSiswa)}</div><div class="text-xs text-slate-500">${esc(t.judul)} · dikumpulkan ${fmtD(p.waktuKumpul)} ${stBadge({ ...p, nilai: null })}</div></div>
     <div class="rounded-2xl bg-slate-50 border border-slate-100 p-3 mb-3"><div class="text-[11px] font-bold text-slate-400 mb-1">JAWABAN</div><div class="text-sm prewrap">${esc(p.jawaban || '(tanpa jawaban teks)')}</div>${safeUrl(p.tautanFile) ? `<a class="inline-flex items-center gap-1 text-sm font-bold text-emerald-700 mt-2" href="${esc(p.tautanFile)}" target="_blank" rel="noopener noreferrer">${ic('link', 'w-4 h-4')} Buka tautan file</a>` : ''}</div>
+    ${fotosOf(p).length ? `<div class="mb-3"><div class="text-[11px] font-bold text-slate-400 mb-1">FOTO (${fotosOf(p).length}) — ketuk untuk memperbesar</div><div class="pgrid">${photoGrid(fotosOf(p), p.id, false)}</div></div>` : ''}
     <form data-form="nilai"><input type="hidden" name="pid" value="${esc(pid)}">
       ${fld(`Nilai (0–${t.nilaiMaks})`, `<input class="input" type="number" step="0.1" min="0" max="${t.nilaiMaks}" name="nilai" required value="${p.nilai ?? ''}">`)}
       ${fld('Feedback untuk siswa', `<textarea class="input" name="feedback">${esc(p.feedback)}</textarea>`)}
@@ -694,17 +757,25 @@ function mDetail(tid) {
     <div class="text-xs text-slate-500 mb-3">Tenggat ${fmtD(t.tenggat)} · Nilai maksimal ${t.nilaiMaks}</div>
     <div class="rounded-2xl bg-slate-50 border border-slate-100 p-3 text-sm prewrap mb-3">${esc(t.instruksi || 'Tidak ada instruksi.')}</div>
     ${safeUrl(t.lampiranUrl) ? `<a class="inline-flex items-center gap-1 text-sm font-bold text-emerald-700 mb-3" href="${esc(t.lampiranUrl)}" target="_blank" rel="noopener noreferrer">${ic('link', 'w-4 h-4')} Buka lampiran</a>` : ''}
-    ${p ? `<div class="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3 mb-3 text-sm"><div class="text-[11px] font-bold text-emerald-700 mb-1">PENGUMPULANMU (${fmtD(p.waktuKumpul)})</div><div class="prewrap">${esc(p.jawaban || '—')}</div>${safeUrl(p.tautanFile) ? `<a class="text-emerald-700 font-bold text-xs" href="${esc(p.tautanFile)}" target="_blank" rel="noopener noreferrer">Tautan file</a>` : ''}${p.nilai != null ? `<div class="mt-2 pt-2 border-t border-emerald-100"><b class="text-emerald-700">Nilai ${p.nilai}/${t.nilaiMaks}</b><div class="text-xs text-slate-600 prewrap mt-1">${esc(p.feedback || '')}</div></div>` : ''}</div>` : ''}
+    ${p ? `<div class="rounded-2xl border border-emerald-100 bg-emerald-50/50 p-3 mb-3 text-sm"><div class="text-[11px] font-bold text-emerald-700 mb-1">PENGUMPULANMU (${fmtD(p.waktuKumpul)})</div><div class="prewrap">${esc(p.jawaban || '—')}</div>${safeUrl(p.tautanFile) ? `<a class="text-emerald-700 font-bold text-xs" href="${esc(p.tautanFile)}" target="_blank" rel="noopener noreferrer">Tautan file</a>` : ''}${fotosOf(p).length ? `<div class="pgrid mt-2">${photoGrid(fotosOf(p), p.id, false)}</div>` : ''}${p.nilai != null ? `<div class="mt-2 pt-2 border-t border-emerald-100"><b class="text-emerald-700">Nilai ${p.nilai}/${t.nilaiMaks}</b><div class="text-xs text-slate-600 prewrap mt-1">${esc(p.feedback || '')}</div></div>` : ''}</div>` : ''}
     <div class="flex justify-end gap-2"><button class="btn btn-s" data-act="mclose">Tutup</button>${p && p.nilai != null ? '' : `<button class="btn btn-p" data-act="submit" data-id="${t.id}">${p ? 'Perbarui' : 'Kumpulkan'}</button>`}</div>`, true);
 }
 function mSubmit(tid) {
   const t = byId(S.tugas, tid), p = mySub(tid);
   if (p && p.nilai != null) return toast('Tugas sudah dinilai dan tidak bisa diubah.', 'err');
+  PH = fotosOf(p).slice(0, MAX_FOTO);
   openModal(`${mhead(p ? 'Perbarui Pengumpulan' : 'Kumpulkan Tugas')}
     <div class="font-extrabold">${esc(t.judul)}</div><div class="text-xs text-slate-500 mb-3">Tenggat ${fmtD(t.tenggat)} · ${sisa(t.tenggat)}</div>
     <form data-form="submit"><input type="hidden" name="tid" value="${esc(tid)}">
       ${fld('Jawaban', `<textarea class="input" name="jawaban" placeholder="Tulis jawabanmu di sini…">${esc(p && p.jawaban)}</textarea>`)}
       ${fld('Tautan file (Google Drive, dll — opsional)', `<input class="input" name="tautan" placeholder="https://…" value="${esc(p && p.tautanFile)}">`)}
+      <div class="mb-3"><label class="lbl">Foto / gambar tugas <span id="phCount" class="text-slate-400 font-normal">${PH.length}/${MAX_FOTO} foto</span></label>
+        <div class="flex flex-wrap gap-2 mb-2"><button type="button" class="btn btn-s" data-act="cam-open">${ic('camera', 'w-4 h-4')} Ambil Foto</button><button type="button" class="btn btn-s" data-act="gal-open">${ic('image', 'w-4 h-4')} Pilih Gambar</button></div>
+        <div id="phGrid" class="pgrid">${photoGrid(PH, '_ph', true)}</div>
+        <div class="text-[11px] text-slate-400 mt-1">Maksimal ${MAX_FOTO} foto. Foto otomatis dikecilkan agar ringan.</div>
+        <input type="file" id="fileCam" data-photo="1" accept="image/*" capture="environment" class="hidden">
+        <input type="file" id="fileGal" data-photo="1" accept="image/*" multiple class="hidden">
+      </div>
       ${mfoot(p ? 'Perbarui' : 'Kumpulkan')}</form>`, true);
 }
 
@@ -775,11 +846,12 @@ forms.submit = async f => {
   const tid = f.get('tid'), t = byId(S.tugas, tid), old = mySub(tid);
   if (old && old.nilai != null) throw new Error('Tugas sudah dinilai, tidak bisa diubah.');
   const jawaban = f.get('jawaban').trim(), tautan = f.get('tautan').trim();
-  if (!jawaban && !tautan) throw new Error('Isi jawaban atau tautan file terlebih dahulu.');
+  const fotos = PH.filter(okImg).slice(0, MAX_FOTO);
+  if (!jawaban && !tautan && !fotos.length) throw new Error('Isi jawaban, tautan file, atau lampirkan foto terlebih dahulu.');
   if (tautan && !safeUrl(tautan)) throw new Error('Tautan harus diawali http:// atau https://');
   const waktu = new Date().toISOString(), status = new Date(waktu) <= new Date(t.tenggat) ? 'tepat' : 'terlambat';
-  if (old) await DB.upd('pengumpulan', old.id, { jawaban, tautanFile: tautan, waktuKumpul: waktu, status });
-  else await DB.set('pengumpulan', tid + '_' + U.user.nis, { tugasId: tid, siswaId: U.user.nis, namaSiswa: U.user.nama, kelasId: t.kelasId, jawaban, tautanFile: tautan, waktuKumpul: waktu, status });
+  if (old) await DB.upd('pengumpulan', old.id, { jawaban, tautanFile: tautan, fotos, waktuKumpul: waktu, status });
+  else await DB.set('pengumpulan', tid + '_' + U.user.nis, { tugasId: tid, siswaId: U.user.nis, namaSiswa: U.user.nama, kelasId: t.kelasId, jawaban, tautanFile: tautan, fotos, waktuKumpul: waktu, status });
   closeModal(); toast(status === 'tepat' ? 'Tugas berhasil dikumpulkan' : 'Tugas dikumpulkan (terlambat)');
 };
 forms.sekolah = async f => {
@@ -852,6 +924,23 @@ const A = {
   grade: d => mNilai(d.id),
   detail: d => mDetail(d.id),
   submit: d => mSubmit(d.id),
+  zoom: d => {
+    const list = d.pid === '_ph' ? PH : fotosOf(byId(S.pengumpulan, d.pid)), s = list[+d.i];
+    if (!okImg(s)) return;
+    $('#lightbox').innerHTML = `<div class="lb" data-act="zoomclose"><img src="${s}" alt="Foto"><button type="button" class="btn btn-s">Tutup</button></div>`;
+  },
+  zoomclose: () => { $('#lightbox').innerHTML = ''; },
+  'photo-del': d => { PH.splice(+d.i, 1); refreshPH(); },
+  'cam-open': () => {
+    if (PH.length >= MAX_FOTO) return toast('Maksimal ' + MAX_FOTO + ' foto.', 'err');
+    if (window.matchMedia && matchMedia('(pointer:coarse)').matches) $('#fileCam').click(); else openCamera();
+  },
+  'gal-open': () => { if (PH.length >= MAX_FOTO) return toast('Maksimal ' + MAX_FOTO + ' foto.', 'err'); $('#fileGal').click(); },
+  'cam-snap': () => {
+    const v = $('#camv'); if (!v || !v.videoWidth) return;
+    const d = encodeJpeg(v, v.videoWidth, v.videoHeight); stopCam(); addPhoto(d);
+  },
+  'cam-close': () => stopCam(),
   'csv-rekap': () => {
     const { perSiswa } = rekapData();
     csv([['NIS', 'Nama', 'Kelas', 'Jumlah Tugas', 'Dikumpulkan', 'Terlambat', 'Belum', 'Rata-rata (0-100)'], ...perSiswa.map(r => [r.s.nis, r.s.nama, nm(S.kelas, r.s.kelasId, 'namaKelas'), r.tot, r.dik, r.tl, r.belum, r.avg ?? ''])], 'rekap-nilai.csv');
@@ -869,6 +958,11 @@ document.addEventListener('submit', async e => {
   if (btn) btn.disabled = true; if (er) er.textContent = '';
   try { await forms[f.dataset.form](new FormData(f), f); } catch (x) { if (er) er.textContent = errMsg(x); else toast(errMsg(x), 'err'); }
   if (btn) btn.disabled = false;
+});
+document.addEventListener('change', async e => {
+  const t = e.target; if (!t || !t.dataset || !t.dataset.photo) return;
+  const files = [...t.files]; t.value = '';
+  for (const f of files) { try { addPhoto(await compressFile(f)); } catch (x) { toast(errMsg(x), 'err'); break; } }
 });
 const onF = e => { const t = e.target; if (t && t.dataset && t.dataset.f && V[t.dataset.f] !== t.value) { V[t.dataset.f] = t.value; renderView(); } };
 document.addEventListener('input', onF); document.addEventListener('change', onF);
